@@ -6,7 +6,6 @@ const speed = require('performance-now');
 const axios = require('axios');
 const pino = require('pino');
 const { Boom } = require('@hapi/boom');
-const readline = require("readline");
 const path = require('path');
 
 // =============== إعدادات التليجرام ===============
@@ -238,12 +237,7 @@ async function startXeony() {
 }
 
 // =============== إعدادات الواتساب ===============
-const { default: makeWASocket, DisconnectReason, jidDecode, getContentType, useMultiFileAuthState, fetchLatestBaileysVersion } = require("@whiskeysockets/baileys");
-
-const question = (text) => {
-    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-    return new Promise((resolve) => { rl.question(text, resolve) });
-};
+const { default: makeWASocket, DisconnectReason, useMultiFileAuthState, fetchLatestBaileysVersion } = require("@whiskeysockets/baileys");
 
 async function XeonBotIncStart() {
     const { version } = await fetchLatestBaileysVersion();
@@ -256,26 +250,30 @@ async function XeonBotIncStart() {
         printQRInTerminal: true,
     });
 
+    // 🟢 رقم الهاتف معين مسبقاً - غير هذا الرقم إلى رقم هاتفك 🟢
     if (!XeonBotInc.authState.creds.registered) {
-        const phoneNumber = await question('📱 Enter phone number (with country code, no + or space):\n');
+        const phoneNumber = "963969061988"; // 🔴 غير هذا الرقم إلى رقم هاتفك (مع رمز البلد بدون + أو صفر)
+        console.log(chalk.yellow(`📱 Using phone number: ${phoneNumber}`));
         let code = await XeonBotInc.requestPairingCode(phoneNumber, 'HXBYFLIX');
         code = code?.match(/.{1,4}/g)?.join("-") || code;
-        console.log(chalk.yellow(`🔑 Pairing Code: ${code}`));
+        console.log(chalk.green(`🔑 Pairing Code: ${code}`));
+        console.log(chalk.cyan(`📱 Open WhatsApp > Settings > Linked Devices > Link a Device`));
+        console.log(chalk.cyan(`🔑 Enter this code: ${code}`));
     }
 
     XeonBotInc.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
         if (qr) {
-            console.log(chalk.yellow('📱 Scan this QR code with WhatsApp:'));
+            console.log(chalk.yellow('📱 QR Code (if pairing fails):'));
             console.log(qr);
         }
         if (connection === 'close') {
             const reason = new Boom(lastDisconnect?.error)?.output?.statusCode;
             if (reason === DisconnectReason.loggedOut) {
-                console.log(chalk.red('❌ Logged out. Delete session folder.'));
+                console.log(chalk.red('❌ Logged out. Delete session folder and restart.'));
             } else {
-                console.log(chalk.yellow('🔄 Reconnecting...'));
-                XeonBotIncStart();
+                console.log(chalk.yellow('🔄 Reconnecting in 5 seconds...'));
+                setTimeout(() => XeonBotIncStart(), 5000);
             }
         } else if (connection === 'open') {
             console.log(chalk.green(`✅ WhatsApp Connected: ${XeonBotInc.user.id.split(":")[0]}`));
