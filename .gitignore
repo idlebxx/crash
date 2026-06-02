@@ -1,0 +1,12 @@
+node_modules/
+session/
+.env
+*.log
+baileysDB.json
+database.json
+lib/premium.json
+lib/reseller.json
+69/
+XeonMedia/
+XSession/
+temp/
