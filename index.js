@@ -5,16 +5,17 @@ const chalk = require('chalk');
 const speed = require('performance-now');
 const axios = require('axios');
 const pino = require('pino');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require("@whiskeysockets/baileys");
 const { Boom } = require('@hapi/boom');
-const path = require('path');
 
 // =============== إعدادات التليجرام ===============
 const bot = new Telegraf(global.BOT_TOKEN);
 const usersFile = 'users.json';
 const premium_file = 'lib/premium.json';
 const reseller_file = 'lib/reseller.json';
+const pairingDir = './lib2/pairing/';
 
-// =============== إنشاء الملفات إذا لم تكن موجودة ===============
+// =============== إنشاء الملفات والمجلدات ===============
 if (!fs.existsSync(usersFile)) fs.writeFileSync(usersFile, JSON.stringify([]));
 if (!fs.existsSync(premium_file)) fs.writeFileSync(premium_file, JSON.stringify([]));
 if (!fs.existsSync(reseller_file)) fs.writeFileSync(reseller_file, JSON.stringify([]));
@@ -23,11 +24,50 @@ if (!fs.existsSync('./database/database.json')) {
     fs.writeFileSync('./database/database.json', JSON.stringify({}));
 }
 if (!fs.existsSync('baileysDB.json')) fs.writeFileSync('baileysDB.json', JSON.stringify({}));
+if (!fs.existsSync(pairingDir)) fs.mkdirSync(pairingDir, { recursive: true });
 
 // =============== قراءة الملفات ===============
 let allUsers = JSON.parse(fs.readFileSync(usersFile));
 let premiumUsers = JSON.parse(fs.readFileSync(premium_file));
 let resellerUsers = JSON.parse(fs.readFileSync(reseller_file));
+
+// =============== دالة إنشاء بوت واتساب جديد ===============
+async function createWhatsAppBot(phoneNumber, userId) {
+    const sessionPath = pairingDir + phoneNumber;
+    const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
+    
+    const sock = makeWASocket({
+        auth: state,
+        logger: pino({ level: 'silent' }),
+        version: [2, 3000, 1026924051],
+        printQRInTerminal: false,
+    });
+
+    if (!sock.authState.creds.registered) {
+        let code = await sock.requestPairingCode(phoneNumber, 'HXBYFLIX');
+        code = code?.match(/.{1,4}/g)?.join("-") || code;
+        
+        // إرسال الكود للمستخدم عبر تليجرام
+        await bot.telegram.sendMessage(userId, `🔐 *Pairing Code for ${phoneNumber}*\n\n\`${code}\`\n\n📱 Open WhatsApp > Settings > Linked Devices > Link a Device`, { parse_mode: 'Markdown' });
+        console.log(chalk.green(`✅ Pairing code sent for ${phoneNumber}`));
+    }
+
+    sock.ev.on('connection.update', async (update) => {
+        const { connection, lastDisconnect } = update;
+        if (connection === 'close') {
+            const reason = new Boom(lastDisconnect?.error)?.output?.statusCode;
+            if (reason !== DisconnectReason.loggedOut) {
+                createWhatsAppBot(phoneNumber, userId);
+            }
+        } else if (connection === 'open') {
+            console.log(chalk.green(`✅ WhatsApp Bot Created: ${phoneNumber}`));
+            await bot.telegram.sendMessage(userId, `✅ *WhatsApp Bot Created Successfully!*\n\n📱 Number: ${phoneNumber}\n🤖 Status: Online`, { parse_mode: 'Markdown' });
+        }
+    });
+
+    sock.ev.on('creds.update', saveCreds);
+    return sock;
+}
 
 // =============== دوال المساعدة ===============
 async function saveUser(userId) {
@@ -58,13 +98,13 @@ async function verifyUser(ctx, next) {
     const isMember = await checkMembership(userId);
     if (!isMember) {
         return ctx.replyWithPhoto(global.pp, {
-            caption: "❌ *Access Denied!*\n\nYou must join to use this bot.",
+            caption: "❌ *Access Denied!*\n\nيجب الاشتراك في القناة والمجموعة لاستخدام البوت.",
             parse_mode: "Markdown",
             reply_markup: {
                 inline_keyboard: [
-                    [{ text: "📢 Channel", url: global.CHANNEL_INVITE_LINK }],
-                    [{ text: "👥 Group", url: global.GROUP_LINK }],
-                    [{ text: "🔄 Check Again", callback_data: "check_membership" }]
+                    [{ text: "📢 القناة", url: global.CHANNEL_INVITE_LINK }],
+                    [{ text: "👥 المجموعة", url: global.GROUP_LINK }],
+                    [{ text: "🔄 تحقق مرة أخرى", callback_data: "check_membership" }]
                 ]
             }
         });
@@ -77,7 +117,7 @@ async function startXeony() {
     bot.on('callback_query', async (ctx) => {
         if (ctx.callbackQuery.data === "check_membership") {
             const isMember = await checkMembership(ctx.callbackQuery.from.id);
-            await ctx.answerCbQuery(isMember ? "✅ Verified!" : "❌ Not yet!", { show_alert: true });
+            await ctx.answerCbQuery(isMember ? "✅ تم التحقق!" : "❌ لم تشترك بعد!", { show_alert: true });
             return;
         }
         await ctx.answerCbQuery();
@@ -86,7 +126,7 @@ async function startXeony() {
     bot.command("start", verifyUser, async (ctx) => {
         if (ctx.chat.type !== "private") return;
         await ctx.replyWithPhoto(global.pp, {
-            caption: `👋 *Welcome ${ctx.from.first_name}*\n\n🤖 Bot: ${global.BOT_NAME}\n\n📱 *Commands:*\n/menu - Show menu\n/checkid - Your ID\n/owner - Developer`,
+            caption: `👋 *مرحباً ${ctx.from.first_name}*\n\n🤖 بوت إنشاء بوتات واتساب\n\n📱 *الأوامر:*\n/create <رقم الهاتف> - إنشاء بوت واتساب جديد\n/menu - عرض القائمة\n/checkid - معرف حسابك\n/owner - المطور`,
             parse_mode: "Markdown"
         });
         await saveUser(ctx.from.id);
@@ -95,112 +135,129 @@ async function startXeony() {
     bot.command("menu", verifyUser, async (ctx) => {
         if (ctx.chat.type !== "private") return;
         const menu = `
-📱 *BOT MENU* 📱
+📱 *قائمة الأوامر* 📱
 
-🔹 /start - Start bot
-🔹 /menu - Show menu
-🔹 /checkid - Your Telegram ID
-🔹 /owner - Developer info
-🔹 /ping - Bot speed
+🔹 /start - بدء البوت
+🔹 /menu - عرض القائمة
+🔹 /checkid - معرف حسابك في تليجرام
+🔹 /owner - معلومات المطور
 
-👑 *Owner Commands*
-🔹 /broadcast - Send to all
-🔹 /addprem <id> - Add premium
-🔹 /delprem <id> - Remove premium
-🔹 /listprem - Premium list
-🔹 /addresell <id> - Add reseller
-🔹 /delresell <id> - Remove reseller
-🔹 /listresell - Reseller list
+🤖 *أوامر إنشاء بوتات واتساب*
+🔹 /create <رقم الهاتف> - إنشاء بوت واتساب جديد
+🔹 /listbots - عرض البوتات التي أنشأتها
+🔹 /delbot <رقم الهاتف> - حذف بوت
+
+👑 *أوامر المالك*
+🔹 /broadcast - إرسال رسالة للجميع
+🔹 /addprem <id> - إضافة مستخدم مميز
+🔹 /delprem <id> - حذف مستخدم مميز
+🔹 /listprem - عرض المستخدمين المميزين
         `;
         await ctx.reply(menu, { parse_mode: 'Markdown' });
     });
 
+    // ✅ الأمر الأساسي: إنشاء بوت واتساب جديد
+    bot.command("create", verifyUser, async (ctx) => {
+        if (ctx.chat.type !== "private") return;
+        
+        const text = ctx.message.text.split(' ');
+        if (text.length < 2) {
+            return ctx.reply("❌ *الرجاء إدخال رقم الهاتف*\n\nمثال: `/create 201234567890`\n\n📱 الرقم مع رمز البلد بدون + أو صفر", { parse_mode: 'Markdown' });
+        }
+        
+        let phoneNumber = text[1].replace(/[^0-9]/g, '');
+        if (phoneNumber.length < 10) {
+            return ctx.reply("❌ *رقم غير صالح*\n\nالرجاء إدخال رقم صحيح مع رمز البلد", { parse_mode: 'Markdown' });
+        }
+        
+        const userId = ctx.from.id;
+        
+        await ctx.reply(`⏳ *جاري إنشاء بوت واتساب للرقم:* ${phoneNumber}\n\nسيتم إرسال كود الـ Pairing إليك خلال لحظات...`, { parse_mode: 'Markdown' });
+        
+        try {
+            await createWhatsAppBot(phoneNumber, userId);
+        } catch (error) {
+            console.error(error);
+            await ctx.reply(`❌ *خطأ في إنشاء البوت*\n\n${error.message}`, { parse_mode: 'Markdown' });
+        }
+    });
+
     bot.command("checkid", verifyUser, async (ctx) => {
         if (ctx.chat.type !== "private") return;
-        await ctx.reply(`📱 *Your ID:*\n\`${ctx.from.id}\``, { parse_mode: 'Markdown' });
+        await ctx.reply(`📱 *معرف حسابك:*\n\`${ctx.from.id}\``, { parse_mode: 'Markdown' });
         await saveUser(ctx.from.id);
     });
 
     bot.command("owner", verifyUser, async (ctx) => {
         if (ctx.chat.type !== "private") return;
-        await ctx.reply(`👨‍💻 *Developer*\n\n📛 Name: IDLEBX\n📱 WhatsApp: [Click here](https://wa.me/${global.owner})\n📢 Channel: [Click here](${global.CHANNEL_INVITE_LINK})`, { parse_mode: 'Markdown', disable_web_page_preview: true });
-    });
-
-    bot.command("ping", verifyUser, async (ctx) => {
-        if (ctx.chat.type !== "private") return;
-        const start = Date.now();
-        await ctx.reply("🏓 Pong!");
-        const end = Date.now();
-        await ctx.reply(`⚡ Speed: ${end - start}ms`);
+        await ctx.reply(`👨‍💻 *المطور*\n\n📛 الاسم: IDLEBX\n📱 واتساب: [اضغط هنا](https://wa.me/${global.owner})\n📢 القناة: [اضغط هنا](${global.CHANNEL_INVITE_LINK})`, { parse_mode: 'Markdown', disable_web_page_preview: true });
     });
 
     bot.command("listprem", verifyUser, async (ctx) => {
         if (ctx.chat.type !== "private") return;
         const isReseller = resellerUsers.includes(ctx.from.id.toString()) || global.DEVELOPER.includes(ctx.from.id.toString());
-        if (!isReseller) return ctx.reply("🚫 *Only resellers/owner can use this command.*", { parse_mode: "Markdown" });
-        if (premiumUsers.length === 0) return ctx.reply("📭 No premium users.");
-        await ctx.reply(`🌹 *Premium List:*\n\n${premiumUsers.join('\n')}`, { parse_mode: "Markdown" });
+        if (!isReseller) return ctx.reply("🚫 *للأسف هذا الأمر للمطور والمميزين فقط*", { parse_mode: "Markdown" });
+        if (premiumUsers.length === 0) return ctx.reply("📭 لا يوجد مستخدمين مميزين.");
+        await ctx.reply(`🌹 *قائمة المميزين:*\n\n${premiumUsers.join('\n')}`, { parse_mode: "Markdown" });
     });
 
     bot.command('addprem', verifyUser, async (ctx) => {
         if (ctx.chat.type !== "private") return;
-        const isReseller = resellerUsers.includes(ctx.from.id.toString()) || global.DEVELOPER.includes(ctx.from.id.toString());
-        if (!isReseller) return ctx.reply("🚫 *Only resellers/owner can use this command.*", { parse_mode: "Markdown" });
+        if (!global.DEVELOPER.includes(ctx.from.id.toString())) return ctx.reply("🚫 *للمطور فقط*", { parse_mode: "Markdown" });
         const text = ctx.message.text.split(' ');
-        if (text.length < 2) return ctx.reply("Usage: `/addprem <user_id>`", { parse_mode: "Markdown" });
+        if (text.length < 2) return ctx.reply("الاستخدام: `/addprem <user_id>`", { parse_mode: "Markdown" });
         const newAdmin = text[1];
-        if (premiumUsers.includes(newAdmin)) return ctx.reply("User already premium.");
+        if (premiumUsers.includes(newAdmin)) return ctx.reply("المستخدم موجود بالفعل.");
         premiumUsers.push(newAdmin);
         fs.writeFileSync(premium_file, JSON.stringify(premiumUsers, null, 2));
-        await ctx.reply(`✅ User ${newAdmin} added as premium.`);
+        await ctx.reply(`✅ المستخدم ${newAdmin} أصبح مميزاً.`);
     });
 
     bot.command('delprem', verifyUser, async (ctx) => {
         if (ctx.chat.type !== "private") return;
-        const isReseller = resellerUsers.includes(ctx.from.id.toString()) || global.DEVELOPER.includes(ctx.from.id.toString());
-        if (!isReseller) return ctx.reply("🚫 *Only resellers/owner can use this command.*", { parse_mode: "Markdown" });
+        if (!global.DEVELOPER.includes(ctx.from.id.toString())) return ctx.reply("🚫 *للمطور فقط*", { parse_mode: "Markdown" });
         const text = ctx.message.text.split(' ');
-        if (text.length < 2) return ctx.reply("Usage: `/delprem <user_id>`", { parse_mode: "Markdown" });
+        if (text.length < 2) return ctx.reply("الاستخدام: `/delprem <user_id>`", { parse_mode: "Markdown" });
         const adminToRemove = text[1];
-        if (!premiumUsers.includes(adminToRemove)) return ctx.reply("User not premium.");
+        if (!premiumUsers.includes(adminToRemove)) return ctx.reply("المستخدم ليس مميزاً.");
         premiumUsers = premiumUsers.filter(id => id !== adminToRemove);
         fs.writeFileSync(premium_file, JSON.stringify(premiumUsers, null, 2));
-        await ctx.reply(`✅ User ${adminToRemove} removed from premium.`);
+        await ctx.reply(`✅ المستخدم ${adminToRemove} تمت إزالته من المميزين.`);
     });
 
     bot.command('addresell', verifyUser, async (ctx) => {
         if (ctx.chat.type !== "private") return;
-        if (!global.DEVELOPER.includes(ctx.from.id.toString())) return ctx.reply("🚫 *Only owner can use this command.*", { parse_mode: "Markdown" });
+        if (!global.DEVELOPER.includes(ctx.from.id.toString())) return ctx.reply("🚫 *للمطور فقط*", { parse_mode: "Markdown" });
         const text = ctx.message.text.split(' ');
-        if (text.length < 2) return ctx.reply("Usage: `/addresell <user_id>`", { parse_mode: "Markdown" });
+        if (text.length < 2) return ctx.reply("الاستخدام: `/addresell <user_id>`", { parse_mode: "Markdown" });
         const newReseller = text[1];
-        if (resellerUsers.includes(newReseller)) return ctx.reply("User already reseller.");
+        if (resellerUsers.includes(newReseller)) return ctx.reply("المستخدم موجود بالفعل.");
         resellerUsers.push(newReseller);
         fs.writeFileSync(reseller_file, JSON.stringify(resellerUsers, null, 2));
-        await ctx.reply(`✅ User ${newReseller} added as reseller.`);
+        await ctx.reply(`✅ المستخدم ${newReseller} أصبح وكيلاً.`);
     });
 
     bot.command('delresell', verifyUser, async (ctx) => {
         if (ctx.chat.type !== "private") return;
-        if (!global.DEVELOPER.includes(ctx.from.id.toString())) return ctx.reply("🚫 *Only owner can use this command.*", { parse_mode: "Markdown" });
+        if (!global.DEVELOPER.includes(ctx.from.id.toString())) return ctx.reply("🚫 *للمطور فقط*", { parse_mode: "Markdown" });
         const text = ctx.message.text.split(' ');
-        if (text.length < 2) return ctx.reply("Usage: `/delresell <user_id>`", { parse_mode: "Markdown" });
+        if (text.length < 2) return ctx.reply("الاستخدام: `/delresell <user_id>`", { parse_mode: "Markdown" });
         const resellerToRemove = text[1];
-        if (!resellerUsers.includes(resellerToRemove)) return ctx.reply("User not reseller.");
+        if (!resellerUsers.includes(resellerToRemove)) return ctx.reply("المستخدم ليس وكيلاً.");
         resellerUsers = resellerUsers.filter(id => id !== resellerToRemove);
         fs.writeFileSync(reseller_file, JSON.stringify(resellerUsers, null, 2));
-        await ctx.reply(`✅ User ${resellerToRemove} removed from reseller.`);
+        await ctx.reply(`✅ المستخدم ${resellerToRemove} تمت إزالته من الوكلاء.`);
     });
 
     bot.command('listresell', verifyUser, async (ctx) => {
         if (ctx.chat.type !== "private") return;
-        if (!global.DEVELOPER.includes(ctx.from.id.toString())) return ctx.reply("🚫 *Only owner can use this command.*", { parse_mode: "Markdown" });
-        if (resellerUsers.length === 0) return ctx.reply("📭 No reseller found.");
-        let list = "🌹 *Reseller List:*\n\n";
+        if (!global.DEVELOPER.includes(ctx.from.id.toString())) return ctx.reply("🚫 *للمطور فقط*", { parse_mode: "Markdown" });
+        if (resellerUsers.length === 0) return ctx.reply("📭 لا يوجد وكلاء.");
+        let list = "🌹 *قائمة الوكلاء:*\n\n";
         for (const userId of resellerUsers) {
             try {
                 const userInfo = await ctx.telegram.getChat(userId);
-                list += `• ${userId} - @${userInfo.username || "no username"}\n`;
+                list += `• ${userId} - @${userInfo.username || "بدون معرف"}\n`;
             } catch (err) {
                 list += `• ${userId}\n`;
             }
@@ -210,9 +267,9 @@ async function startXeony() {
 
     bot.command('broadcast', verifyUser, async (ctx) => {
         if (ctx.chat.type !== "private") return;
-        if (!global.DEVELOPER.includes(ctx.from.id.toString())) return ctx.reply("🚫 *Only owner can use this command.*", { parse_mode: "Markdown" });
+        if (!global.DEVELOPER.includes(ctx.from.id.toString())) return ctx.reply("🚫 *للمطور فقط*", { parse_mode: "Markdown" });
         const cmdParts = ctx.message.text.split(' ');
-        if (cmdParts.length < 2) return ctx.reply("Usage: `/broadcast <message>`", { parse_mode: 'Markdown' });
+        if (cmdParts.length < 2) return ctx.reply("الاستخدام: `/broadcast <الرسالة>`", { parse_mode: 'Markdown' });
         const broadcastMessage = cmdParts.slice(1).join(' ');
         const allRecipients = [...new Set([...allUsers, ...premiumUsers])];
         let successCount = 0;
@@ -223,7 +280,7 @@ async function startXeony() {
                 await new Promise(r => setTimeout(r, 100));
             } catch (err) {}
         }
-        await ctx.reply(`✅ Broadcast done.\n📨 Success: ${successCount}\n📭 Failed: ${allRecipients.length - successCount}`);
+        await ctx.reply(`✅ تم الإرسال.\n📨 نجح: ${successCount}\n📭 فشل: ${allRecipients.length - successCount}`);
     });
 
     bot.on('message', async (ctx) => {
@@ -232,56 +289,8 @@ async function startXeony() {
 
     bot.launch();
     bot.telegram.getMe().then((getme) => {
-        console.log(chalk.green(`✅ Telegram Bot: @${getme.username}`));
+        console.log(chalk.green(`✅ بوت التليجرام: @${getme.username}`));
     });
-}
-
-// =============== إعدادات الواتساب ===============
-const { default: makeWASocket, DisconnectReason, useMultiFileAuthState, fetchLatestBaileysVersion } = require("@whiskeysockets/baileys");
-
-async function XeonBotIncStart() {
-    const { version } = await fetchLatestBaileysVersion();
-    const { state, saveCreds } = await useMultiFileAuthState("session");
-
-    const XeonBotInc = makeWASocket({
-        auth: state,
-        logger: pino({ level: 'silent' }),
-        version: [2, 3000, 1026924051],
-        printQRInTerminal: true,
-    });
-
-    // 🟢 رقم الهاتف معين مسبقاً - غير هذا الرقم إلى رقم هاتفك 🟢
-    if (!XeonBotInc.authState.creds.registered) {
-        const phoneNumber = "963969061988"; // 🔴 غير هذا الرقم إلى رقم هاتفك (مع رمز البلد بدون + أو صفر)
-        console.log(chalk.yellow(`📱 Using phone number: ${phoneNumber}`));
-        let code = await XeonBotInc.requestPairingCode(phoneNumber, 'HXBYFLIX');
-        code = code?.match(/.{1,4}/g)?.join("-") || code;
-        console.log(chalk.green(`🔑 Pairing Code: ${code}`));
-        console.log(chalk.cyan(`📱 Open WhatsApp > Settings > Linked Devices > Link a Device`));
-        console.log(chalk.cyan(`🔑 Enter this code: ${code}`));
-    }
-
-    XeonBotInc.ev.on('connection.update', async (update) => {
-        const { connection, lastDisconnect, qr } = update;
-        if (qr) {
-            console.log(chalk.yellow('📱 QR Code (if pairing fails):'));
-            console.log(qr);
-        }
-        if (connection === 'close') {
-            const reason = new Boom(lastDisconnect?.error)?.output?.statusCode;
-            if (reason === DisconnectReason.loggedOut) {
-                console.log(chalk.red('❌ Logged out. Delete session folder and restart.'));
-            } else {
-                console.log(chalk.yellow('🔄 Reconnecting in 5 seconds...'));
-                setTimeout(() => XeonBotIncStart(), 5000);
-            }
-        } else if (connection === 'open') {
-            console.log(chalk.green(`✅ WhatsApp Connected: ${XeonBotInc.user.id.split(":")[0]}`));
-        }
-    });
-
-    XeonBotInc.ev.on('creds.update', saveCreds);
-    return XeonBotInc;
 }
 
 // =============== التشغيل الرئيسي ===============
@@ -291,16 +300,12 @@ async function XeonBotIncStart() {
         console.log(chalk.green("     🤖 STARTING BOT SYSTEM 🤖"));
         console.log(chalk.blue("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"));
         
-        console.log(chalk.yellow("📱 Connecting to WhatsApp..."));
-        await XeonBotIncStart();
-        
-        console.log(chalk.green("✅ WhatsApp Connected!"));
-        console.log(chalk.yellow("\n🤖 Starting Telegram Bot..."));
+        console.log(chalk.yellow("🤖 Starting Telegram Bot..."));
         await startXeony();
         
         console.log(chalk.green("✅ Telegram Bot Started!"));
         console.log(chalk.blue("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"));
-        console.log(chalk.green("     🎉 BOTH BOTS ARE RUNNING 🎉"));
+        console.log(chalk.green("     🎉 BOT IS RUNNING 🎉"));
         console.log(chalk.blue("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"));
     } catch (error) {
         console.error(chalk.red("❌ Error:"), error.message);
