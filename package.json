@@ -6,7 +6,7 @@
     "start": "node index.js"
   },
   "dependencies": {
-    "@adiwajshing/baileys": "6.7.9",
+    "@adiwajshing/baileys": "^6.7.0",
     "@hapi/boom": "^10.0.1",
     "axios": "^1.7.9",
     "chalk": "^4.1.2",
@@ -18,6 +18,10 @@
     "pino": "^8.21.0",
     "qrcode-terminal": "^0.12.0",
     "telegraf": "^4.16.3",
-    "yargs": "^17.7.2"
+    "yargs": "^17.7.2",
+    "performance-now": "^2.1.0",
+    "file-type": "^16.5.4",
+    "awesome-phonenumber": "^6.10.0",
+    "node-cache": "^5.1.2"
   }
 }
