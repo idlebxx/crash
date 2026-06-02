@@ -22,36 +22,8 @@ global.CHANNEL_ID = -1003992890677;
 
 // =============== صور وخلفيات ===============
 global.pp = 'https://i.postimg.cc/gj3Pqv70/idleb.jpg';
-global.link = 'https://whatsapp.com/channel/0029Vb8035sJ93wZlpYTP10z';
-global.idch = 'https://whatsapp.com/channel/0029Vb8035sJ93wZlpYTP10z';
 
-// =============== إعدادات إضافية ===============
-global.baileysDB = 'baileysDB.json';
-global.botDb = 'database/database.json';
-global.prefa = ['', '!', '.', ',', '🐤', '🗿'];
-
-global.mess = {
-    success: '✅ Done',
-    admin: '⛔ Only group admins!',
-    botAdmin: '⛔ Bot needs to be admin!',
-    OnlyOwner: '⛔ Premium only!',
-    OnlyGrup: '⛔ Groups only!',
-    private: '⛔ Private chat only!',
-    wait: '⏳ Processing...'
-};
-
-// =============== تم إزالة الـ require("./lib/lang") ===============
-// لأن الملف غير موجود، تم إنشاء اللغة مباشرة هنا
-
-global.language = {
-    first_chat: (botName, userName) => {
-        return `👋 مرحباً ${userName}\n\n🤖 أنا بوت ${botName}\n📱 يمكنك استخدام الأوامر التالية:\n\n/start - بدء البوت\n/menu - عرض القائمة\n/checkid - معرف حسابك\n/owner - معلومات المطور`;
-    }
-};
-
-global.lang = global.language;
-
-console.log(chalk.green("✅ Settings loaded successfully"));
+console.log(chalk.green("✅ Settings loaded"));
 
 let file = require.resolve(__filename);
 fs.watchFile(file, () => {
